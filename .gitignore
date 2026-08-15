@@ -1,0 +1,12 @@
+# Built artifacts
+ffmpeg
+ffprobe
+ffplay
+*.exe
+*.dll
+*.o
+*.a
+config.h
+config.asm
+config.mak
+ffbuild/*.mak
