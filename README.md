@@ -31,15 +31,18 @@ https://github.com/Abdullah-Masood-05/deepscreen-viewer
 
 ## Build recipe
 
-Clone FFmpeg at the `n7.1.1` tag, then run the configure command in
-`build.sh` (an MSYS2/MinGW64 environment is expected) and `make`. The script
-holds the exact flags this binary was built with, so the result is
-reproducible.
+`build.sh` is the entire build. It clones FFmpeg at the `n7.1.1` tag, runs the
+configure command with exactly the flags this binary was built with, builds,
+and drops `dist/ffmpeg.exe` for you. Run it from an MSYS2/MinGW64 shell:
 
 ```
 ./build.sh
-make -j$(nproc)
 ```
+
+The custom part is the configure flag set inside the script: start from
+`--disable-all` and re-enable only the DirectShow capture pieces. That is the
+whole difference between this binary and a stock FFmpeg build, and it is the
+only code this repository holds.
 
 ## Downloads
 
