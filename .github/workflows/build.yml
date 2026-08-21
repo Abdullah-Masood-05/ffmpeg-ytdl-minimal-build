@@ -71,7 +71,7 @@ jobs:
             --disable-debug \
             --pkg-config=pkg-config \
             --extra-ldflags=-static
-          make -j$(nproc) ffmpeg
+          make -j$(nproc) ffmpeg.exe
           mkdir -p ../dist
           cp ffmpeg.exe ../dist/ffmpeg-windows-x86_64.exe
 
