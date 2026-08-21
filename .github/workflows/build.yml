@@ -84,6 +84,9 @@ jobs:
   build-linux:
     name: Build Linux x86_64 (v4l2 for Debian / Fedora / Arch)
     runs-on: ubuntu-22.04
+    env:
+      PKG_VERSION: 7.1.1
+      PKG_ARCH: amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -91,7 +94,9 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential nasm pkg-config git libv4l-dev
+          sudo apt-get install -y \
+            build-essential nasm pkg-config git libv4l-dev \
+            rpm zstd
 
       - name: Build Linux Binary
         run: |
@@ -131,11 +136,90 @@ jobs:
           cp ffmpeg ../dist/ffmpeg-linux-x86_64
           chmod +x ../dist/ffmpeg-linux-x86_64
 
-      - name: Upload Linux Artifact
+      - name: Package .deb (Debian / Ubuntu)
+        run: |
+          DEB_ROOT=pkg-deb
+          mkdir -p $DEB_ROOT/DEBIAN
+          mkdir -p $DEB_ROOT/usr/bin
+          cp dist/ffmpeg-linux-x86_64 $DEB_ROOT/usr/bin/ffmpeg-deepscreen
+          chmod +x $DEB_ROOT/usr/bin/ffmpeg-deepscreen
+          cat > $DEB_ROOT/DEBIAN/control << EOF
+          Package: ffmpeg-deepscreen
+          Version: ${{ env.PKG_VERSION }}
+          Architecture: amd64
+          Maintainer: Abdullah Masood <deepscreen@example.com>
+          Description: Minimal static FFmpeg build for DeepScreen
+           Captures webcam via v4l2. Static single binary with no runtime dependencies.
+          EOF
+          dpkg-deb --build $DEB_ROOT dist/ffmpeg-deepscreen_${{ env.PKG_VERSION }}_amd64.deb
+
+      - name: Package .rpm (Fedora / RHEL)
+        run: |
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp dist/ffmpeg-linux-x86_64 ~/rpmbuild/SOURCES/ffmpeg-deepscreen
+          cat > ~/rpmbuild/SPECS/ffmpeg-deepscreen.spec << 'SPEC'
+          Name:           ffmpeg-deepscreen
+          Version:        7.1.1
+          Release:        1%{?dist}
+          Summary:        Minimal static FFmpeg for DeepScreen
+          License:        LGPL-2.1
+          BuildArch:      x86_64
+
+          %description
+          Minimal static FFmpeg build for DeepScreen. Captures webcam via v4l2.
+          Single static binary with no runtime dependencies.
+
+          %install
+          mkdir -p %{buildroot}/usr/bin
+          install -m 0755 %{_sourcedir}/ffmpeg-deepscreen %{buildroot}/usr/bin/ffmpeg-deepscreen
+
+          %files
+          /usr/bin/ffmpeg-deepscreen
+
+          %changelog
+          * Thu Aug 21 2026 DeepScreen Build <deepscreen@example.com> - 7.1.1-1
+          - Initial minimal static build for DeepScreen
+          SPEC
+          rpmbuild -bb ~/rpmbuild/SPECS/ffmpeg-deepscreen.spec
+          cp ~/rpmbuild/RPMS/x86_64/ffmpeg-deepscreen-*.rpm dist/
+
+      - name: Package .pkg.tar.zst (Arch Linux)
+        run: |
+          ARCH_ROOT=pkg-arch
+          mkdir -p $ARCH_ROOT/usr/bin
+          cp dist/ffmpeg-linux-x86_64 $ARCH_ROOT/usr/bin/ffmpeg-deepscreen
+          chmod +x $ARCH_ROOT/usr/bin/ffmpeg-deepscreen
+          # Build the package tarball manually (no makepkg since we are on Ubuntu)
+          cd $ARCH_ROOT
+          tar -czf ../dist/ffmpeg-deepscreen-${{ env.PKG_VERSION }}-1-x86_64.pkg.tar.gz usr/
+          cd ..
+          # Recompress as .zst
+          zstd --rm dist/ffmpeg-deepscreen-${{ env.PKG_VERSION }}-1-x86_64.pkg.tar.gz \
+               -o dist/ffmpeg-deepscreen-${{ env.PKG_VERSION }}-1-x86_64.pkg.tar.zst
+
+      - name: Upload raw binary
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-linux-x86_64
           path: dist/ffmpeg-linux-x86_64
+
+      - name: Upload .deb package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-deepscreen-deb
+          path: dist/ffmpeg-deepscreen_${{ env.PKG_VERSION }}_amd64.deb
+
+      - name: Upload .rpm package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-deepscreen-rpm
+          path: dist/ffmpeg-deepscreen-*.rpm
+
+      - name: Upload .pkg.tar.zst package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-deepscreen-pkg-tar-zst
+          path: dist/ffmpeg-deepscreen-${{ env.PKG_VERSION }}-1-x86_64.pkg.tar.zst
 
   build-macos:
     name: Build macOS (${{ matrix.arch }})
