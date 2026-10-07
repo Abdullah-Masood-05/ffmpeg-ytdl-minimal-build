@@ -1,4 +1,4 @@
-name: Build Minimal FFmpeg
+name: Build minimal FFmpeg for yt-dlp (Windows x64)
 
 on:
   push:
@@ -6,7 +6,6 @@ on:
       - 'v*'
     branches:
       - main
-      - master
   workflow_dispatch:
 
 permissions:
@@ -32,275 +31,55 @@ jobs:
             git
             make
             diffutils
-            pkg-config
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-lame
+            mingw-w64-x86_64-opus
+            mingw-w64-x86_64-zlib
 
-      - name: Build Windows Binary
+      - name: Build ffmpeg.exe and ffprobe.exe
+        run: ./build.sh
+
+      - name: Smoke test
         run: |
-          git clone --depth 1 --branch n7.1.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
-          cd ffmpeg-src
-          ./configure \
-            --disable-all \
-            --enable-cross-compile \
-            --arch=x86_64 \
-            --target-os=mingw32 \
-            --enable-ffmpeg \
-            --enable-avdevice \
-            --enable-avcodec \
-            --enable-avformat \
-            --enable-avutil \
-            --enable-avfilter \
-            --enable-swscale \
-            --enable-indev=dshow \
-            --enable-decoder=mjpeg,rawvideo \
-            --enable-encoder=rawvideo \
-            --enable-muxer=rawvideo \
-            --enable-demuxer=rawvideo \
-            --enable-protocol=pipe \
-            --enable-parser=mjpeg \
-            --enable-filter=scale \
-            --disable-iconv \
-            --disable-zlib \
-            --disable-schannel \
-            --enable-small \
-            --disable-doc \
-            --disable-ffplay \
-            --disable-ffprobe \
-            --disable-network \
-            --disable-debug \
-            --pkg-config=pkg-config \
-            --extra-ldflags=-static
-          make -j$(nproc) ffmpeg.exe
-          mkdir -p ../dist
-          cp ffmpeg.exe ../dist/ffmpeg-windows-x86_64.exe
+          ./dist/ffmpeg.exe -hide_banner -version
+          ./dist/ffmpeg.exe -hide_banner -bsfs | grep -q '^setts'
+          ./dist/ffprobe.exe -hide_banner -version
+          cd dist && sha256sum ffmpeg.exe ffprobe.exe | tee SHA256SUMS.txt
 
-      - name: Upload Windows Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-windows-x86_64
-          path: dist/ffmpeg-windows-x86_64.exe
-
-  build-linux:
-    name: Build Linux x86_64 (v4l2 for Debian / Fedora / Arch)
-    runs-on: ubuntu-22.04
-    env:
-      PKG_VERSION: 7.1.1
-      PKG_ARCH: amd64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Build Tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential nasm pkg-config git libv4l-dev \
-            rpm zstd
-
-      - name: Build Linux Binary
-        run: |
-          git clone --depth 1 --branch n7.1.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
-          cd ffmpeg-src
-          ./configure \
-            --disable-all \
-            --arch=x86_64 \
-            --target-os=linux \
-            --enable-ffmpeg \
-            --enable-avdevice \
-            --enable-avcodec \
-            --enable-avformat \
-            --enable-avutil \
-            --enable-avfilter \
-            --enable-swscale \
-            --enable-indev=v4l2 \
-            --enable-decoder=mjpeg,rawvideo \
-            --enable-encoder=rawvideo \
-            --enable-muxer=rawvideo \
-            --enable-demuxer=rawvideo \
-            --enable-protocol=pipe \
-            --enable-parser=mjpeg \
-            --enable-filter=scale \
-            --disable-iconv \
-            --disable-zlib \
-            --enable-small \
-            --disable-doc \
-            --disable-ffplay \
-            --disable-ffprobe \
-            --disable-network \
-            --disable-debug \
-            --pkg-config=pkg-config \
-            --extra-ldflags=-static
-          make -j$(nproc) ffmpeg
-          mkdir -p ../dist
-          cp ffmpeg ../dist/ffmpeg-linux-x86_64
-          chmod +x ../dist/ffmpeg-linux-x86_64
-
-      - name: Package .deb (Debian / Ubuntu)
-        run: |
-          DEB_ROOT=pkg-deb
-          mkdir -p $DEB_ROOT/DEBIAN
-          mkdir -p $DEB_ROOT/usr/bin
-          cp dist/ffmpeg-linux-x86_64 $DEB_ROOT/usr/bin/ffmpeg-deepscreen
-          chmod +x $DEB_ROOT/usr/bin/ffmpeg-deepscreen
-          cat > $DEB_ROOT/DEBIAN/control << EOF
-          Package: ffmpeg-deepscreen
-          Version: ${{ env.PKG_VERSION }}
-          Architecture: amd64
-          Maintainer: Abdullah Masood <deepscreen@example.com>
-          Description: Minimal static FFmpeg build for DeepScreen
-           Captures webcam via v4l2. Static single binary with no runtime dependencies.
-          EOF
-          dpkg-deb --build $DEB_ROOT dist/ffmpeg-deepscreen_${{ env.PKG_VERSION }}_amd64.deb
-
-      - name: Package .rpm (Fedora / RHEL)
-        run: |
-          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-          cp dist/ffmpeg-linux-x86_64 ~/rpmbuild/SOURCES/ffmpeg-deepscreen
-          cat > ~/rpmbuild/SPECS/ffmpeg-deepscreen.spec << 'SPEC'
-          Name:           ffmpeg-deepscreen
-          Version:        7.1.1
-          Release:        1%{?dist}
-          Summary:        Minimal static FFmpeg for DeepScreen
-          License:        LGPL-2.1
-          BuildArch:      x86_64
-
-          %description
-          Minimal static FFmpeg build for DeepScreen. Captures webcam via v4l2.
-          Single static binary with no runtime dependencies.
-
-          %install
-          mkdir -p %{buildroot}/usr/bin
-          install -m 0755 %{_sourcedir}/ffmpeg-deepscreen %{buildroot}/usr/bin/ffmpeg-deepscreen
-
-          %files
-          /usr/bin/ffmpeg-deepscreen
-
-          %changelog
-          * Thu Aug 21 2026 DeepScreen Build <deepscreen@example.com> - 7.1.1-1
-          - Initial minimal static build for DeepScreen
-          SPEC
-          rpmbuild -bb ~/rpmbuild/SPECS/ffmpeg-deepscreen.spec
-          cp ~/rpmbuild/RPMS/x86_64/ffmpeg-deepscreen-*.rpm dist/
-
-      - name: Package .pkg.tar.zst (Arch Linux)
-        run: |
-          ARCH_ROOT=pkg-arch
-          mkdir -p $ARCH_ROOT/usr/bin
-          cp dist/ffmpeg-linux-x86_64 $ARCH_ROOT/usr/bin/ffmpeg-deepscreen
-          chmod +x $ARCH_ROOT/usr/bin/ffmpeg-deepscreen
-          # Build the package tarball manually (no makepkg since we are on Ubuntu)
-          cd $ARCH_ROOT
-          tar -czf ../dist/ffmpeg-deepscreen-${{ env.PKG_VERSION }}-1-x86_64.pkg.tar.gz usr/
-          cd ..
-          # Recompress as .zst
-          zstd --rm dist/ffmpeg-deepscreen-${{ env.PKG_VERSION }}-1-x86_64.pkg.tar.gz \
-               -o dist/ffmpeg-deepscreen-${{ env.PKG_VERSION }}-1-x86_64.pkg.tar.zst
-
-      - name: Upload raw binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-linux-x86_64
-          path: dist/ffmpeg-linux-x86_64
-
-      - name: Upload .deb package
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-deepscreen-deb
-          path: dist/ffmpeg-deepscreen_${{ env.PKG_VERSION }}_amd64.deb
-
-      - name: Upload .rpm package
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-deepscreen-rpm
-          path: dist/ffmpeg-deepscreen-*.rpm
-
-      - name: Upload .pkg.tar.zst package
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-deepscreen-pkg-tar-zst
-          path: dist/ffmpeg-deepscreen-${{ env.PKG_VERSION }}-1-x86_64.pkg.tar.zst
-
-  build-macos:
-    name: Build macOS (${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - arch: arm64
-            os: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Build Tools
-        run: |
-          brew install nasm pkg-config
-
-      - name: Build macOS Binary
-        run: |
-          git clone --depth 1 --branch n7.1.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
-          cd ffmpeg-src
-          ./configure \
-            --disable-all \
-            --arch=${{ matrix.arch }} \
-            --target-os=darwin \
-            --enable-ffmpeg \
-            --enable-avdevice \
-            --enable-avcodec \
-            --enable-avformat \
-            --enable-avutil \
-            --enable-avfilter \
-            --enable-swscale \
-            --enable-indev=avfoundation \
-            --enable-decoder=mjpeg,rawvideo \
-            --enable-encoder=rawvideo \
-            --enable-muxer=rawvideo \
-            --enable-demuxer=rawvideo \
-            --enable-protocol=pipe \
-            --enable-parser=mjpeg \
-            --enable-filter=scale \
-            --disable-iconv \
-            --disable-zlib \
-            --enable-small \
-            --disable-doc \
-            --disable-ffplay \
-            --disable-ffprobe \
-            --disable-network \
-            --disable-debug \
-            --pkg-config=pkg-config
-          make -j$(sysctl -n hw.ncpu) ffmpeg
-          mkdir -p ../dist
-          cp ffmpeg ../dist/ffmpeg-macos-${{ matrix.arch }}
-          chmod +x ../dist/ffmpeg-macos-${{ matrix.arch }}
-
-      - name: Upload macOS Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-macos-${{ matrix.arch }}
-          path: dist/ffmpeg-macos-${{ matrix.arch }}
+          name: ffmpeg-ytdl-win64
+          path: |
+            dist/ffmpeg.exe
+            dist/ffprobe.exe
+            dist/SHA256SUMS.txt
 
   release:
     name: Create GitHub Release
-    needs: [build-windows, build-linux, build-macos]
+    needs: build-windows
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          path: dist-release
-          merge-multiple: true
+          name: ffmpeg-ytdl-win64
+          path: dist
 
-      - name: Create or update Release
+      - name: Package
+        run: |
+          cd dist
+          zip ../ffmpeg-7.1.1-ytdl-win64.zip ffmpeg.exe ffprobe.exe SHA256SUMS.txt
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist-release/*
-          tag_name: ${{ github.ref_name }}
-          name: FFmpeg Minimal ${{ github.ref_name }}
-          draft: false
-          prerelease: false
+            ffmpeg-7.1.1-ytdl-win64.zip
+            dist/ffmpeg.exe
+            dist/ffprobe.exe
+            dist/SHA256SUMS.txt
+          name: FFmpeg 7.1.1 minimal for yt-dlp ${{ github.ref_name }}
