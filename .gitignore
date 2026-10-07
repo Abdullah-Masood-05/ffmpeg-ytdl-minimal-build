@@ -10,3 +10,5 @@ config.h
 config.asm
 config.mak
 ffbuild/*.mak
+ffmpeg-src/
+dist/
