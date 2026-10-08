@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Reproduce the ffmpeg-ytdl-minimal-build static ffmpeg.exe + ffprobe.exe.
+# Reproduce the ffmpeg-ytdl-minimal-build ffmpeg + ffprobe binaries.
 #
-# A minimal, LGPL, statically linked FFmpeg for Windows x64 that contains
+# A minimal, LGPL, statically linked FFmpeg (Windows x64, Linux x86_64,
+# macOS arm64) that contains
 # exactly what yt-dlp's post-processors need for a YouTube downloader:
 #   - merging bestvideo+bestaudio into mp4/mkv/webm (stream copy)
 #   - extracting audio to mp3 / m4a / opus / wav / flac (+ vorbis, aac)
@@ -11,7 +12,8 @@
 # What this does:
 #   1. Clones FFmpeg at the n7.1.1 tag (shallow)
 #   2. Configures it from --disable-all, re-enabling only the pieces above
-#   3. Builds ffmpeg.exe and ffprobe.exe (static, no DLLs)
+#   3. Builds ffmpeg and ffprobe (static: no DLLs on Windows, no shared libs
+#      besides glibc-free static on Linux, only system libs on macOS)
 #   4. Copies the results to ./dist/
 #
 # Requirements (MSYS2 MINGW64 shell):
@@ -31,6 +33,38 @@ UPSTREAM_URL="https://github.com/FFmpeg/FFmpeg.git"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="${1:-$SCRIPT_DIR/ffmpeg-src}"
 OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/dist}"
+DEPS_PREFIX="${DEPS_PREFIX:-$SCRIPT_DIR/deps-prefix}"
+LAME_VERSION="3.100"
+OPUS_VERSION="1.5.2"
+
+case "$(uname -s)" in
+  MINGW*|MSYS*) PLATFORM=windows ;;
+  Linux)        PLATFORM=linux ;;
+  Darwin)       PLATFORM=macos ;;
+  *) echo "unsupported platform: $(uname -s)" >&2; exit 1 ;;
+esac
+if [ "$PLATFORM" = macos ]; then JOBS="$(sysctl -n hw.ncpu)"; else JOBS="$(nproc)"; fi
+EXE=""; [ "$PLATFORM" = windows ] && EXE=".exe"
+echo ">> platform: $PLATFORM"
+
+# ── 0. Static LAME + Opus (Linux / macOS) ──────────────────────────────────
+fetch() { curl -fsSL --retry 5 --retry-delay 3 -o "$2" "$1"; }
+if [ "$PLATFORM" != windows ] && [ ! -f "$DEPS_PREFIX/lib/libmp3lame.a" ]; then
+  echo ">> building static LAME ${LAME_VERSION} and Opus ${OPUS_VERSION}"
+  HOST_ARGS=()
+  # LAME 3.100's config.guess predates Apple Silicon.
+  [ "$PLATFORM" = macos ] && [ "$(uname -m)" = arm64 ] &&     HOST_ARGS=(--build=aarch64-apple-darwin --host=aarch64-apple-darwin)
+  work="$(mktemp -d)"
+  fetch "https://downloads.sourceforge.net/project/lame/lame/${LAME_VERSION}/lame-${LAME_VERSION}.tar.gz" "$work/lame.tgz"
+  fetch "https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz" "$work/opus.tgz"
+  tar -xzf "$work/lame.tgz" -C "$work"
+  tar -xzf "$work/opus.tgz" -C "$work"
+  # lame_init_old is listed in the export file but not built; drop it.
+  sed -i.bak '/lame_init_old/d' "$work/lame-${LAME_VERSION}/include/libmp3lame.sym"
+  (cd "$work/lame-${LAME_VERSION}" &&     ./configure --prefix="$DEPS_PREFIX" --disable-shared --enable-static       --disable-frontend --disable-decoder --enable-nasm=no ${HOST_ARGS[@]+"${HOST_ARGS[@]}"}       CFLAGS="-O2 -fPIC ${MACOS_CFLAGS:-}" &&     make -j"$JOBS" && make install)
+  (cd "$work/opus-${OPUS_VERSION}" &&     ./configure --prefix="$DEPS_PREFIX" --disable-shared --enable-static       --disable-doc --disable-extra-programs CFLAGS="-O2 -fPIC ${MACOS_CFLAGS:-}" &&     make -j"$JOBS" && make install)
+  rm -rf "$work"
+fi
 
 # ── 1. Source ──────────────────────────────────────────────────────────────
 if [ ! -d "$SRC_DIR/.git" ]; then
@@ -61,12 +95,31 @@ BSFS="aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb,vp9_superframe,vp9_superfr
 # Filters ffmpeg's CLI auto-inserts for audio/pixel-format conversion.
 FILTERS="aresample,aformat,anull,atrim,format,null,trim,scale,copy,acopy"
 
+case "$PLATFORM" in
+  windows)
+    PLATFORM_ARGS=(--enable-cross-compile --arch=x86_64 --target-os=mingw32
+                   --extra-ldflags="-static -static-libgcc")
+    ;;
+  linux)
+    export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig"
+    PLATFORM_ARGS=(--arch=x86_64 --target-os=linux
+                   --extra-cflags="-I$DEPS_PREFIX/include"
+                   --extra-ldflags="-L$DEPS_PREFIX/lib -static"
+                   --extra-libs="-lm")
+    ;;
+  macos)
+    export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig"
+    PLATFORM_ARGS=(--arch="$(uname -m)" --target-os=darwin
+                   --extra-cflags="-I$DEPS_PREFIX/include ${MACOS_CFLAGS:-}"
+                   --extra-ldflags="-L$DEPS_PREFIX/lib ${MACOS_CFLAGS:-}"
+                   --extra-libs="-lm")
+    ;;
+esac
+
 echo ">> configuring minimal build"
 ./configure \
   --disable-all \
-  --enable-cross-compile \
-  --arch=x86_64 \
-  --target-os=mingw32 \
+  "${PLATFORM_ARGS[@]}" \
   --enable-ffmpeg \
   --enable-ffprobe \
   --enable-avcodec \
@@ -93,18 +146,21 @@ echo ">> configuring minimal build"
   --disable-network \
   --disable-debug \
   --pkg-config=pkg-config \
-  --pkg-config-flags=--static \
-  --extra-ldflags="-static -static-libgcc"
+  --pkg-config-flags=--static
 
 # ── 3. Build ───────────────────────────────────────────────────────────────
 echo ">> building (this takes a while)"
-make -j"$(nproc)" ffmpeg.exe ffprobe.exe
-strip ffmpeg.exe ffprobe.exe
+make -j"$JOBS" "ffmpeg$EXE" "ffprobe$EXE"
+strip "ffmpeg$EXE" "ffprobe$EXE"
 
 # ── 4. Extract ─────────────────────────────────────────────────────────────
 mkdir -p "$OUT_DIR"
-cp ffmpeg.exe ffprobe.exe "$OUT_DIR/"
+cp "ffmpeg$EXE" "ffprobe$EXE" "$OUT_DIR/"
 echo ">> done:"
-ls -l "$OUT_DIR"/ffmpeg.exe "$OUT_DIR"/ffprobe.exe
-echo ">> runtime DLL imports (should be Windows system DLLs only):"
-objdump -p "$OUT_DIR/ffmpeg.exe" | grep "DLL Name" || true
+ls -l "$OUT_DIR/ffmpeg$EXE" "$OUT_DIR/ffprobe$EXE"
+echo ">> runtime library dependencies:"
+case "$PLATFORM" in
+  windows) objdump -p "$OUT_DIR/ffmpeg.exe" | grep "DLL Name" || true ;;
+  linux)   file "$OUT_DIR/ffmpeg"; ldd "$OUT_DIR/ffmpeg" || true ;;
+  macos)   otool -L "$OUT_DIR/ffmpeg" ;;
+esac
