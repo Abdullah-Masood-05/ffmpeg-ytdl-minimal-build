@@ -20,16 +20,24 @@ done
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# One second of stereo 48 kHz noise as raw PCM, wrapped in WAV.
-head -c 192000 /dev/urandom > "$work/in.raw"
-"$FFMPEG" -hide_banner -loglevel error -f s16le -ar 48000 -ac 2 -i "$work/in.raw" "$work/in.wav"
+# One second of stereo 48 kHz 16-bit noise as a WAV file. The header is
+# written by hand because the build (deliberately) has no raw PCM demuxer.
+{
+  printf 'RIFF\x24\xee\x02\x00WAVE'
+  printf 'fmt \x10\x00\x00\x00\x01\x00\x02\x00\x80\xbb\x00\x00\x00\xee\x02\x00\x04\x00\x10\x00'
+  printf 'data\x00\xee\x02\x00'
+  head -c 192000 /dev/urandom
+} > "$work/in.wav"
+"$FFPROBE" -v error -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 "$work/in.wav"
 
-for out in out.mp3 out.m4a out.opus out.flac out.mkv; do
+for out in out.mp3 out.m4a out.opus out.flac; do
   "$FFMPEG" -hide_banner -loglevel error -y -i "$work/in.wav" "$work/$out"
   dur="$("$FFPROBE" -v error -show_entries format=duration -of csv=p=0 "$work/$out")"
   echo "$out: duration=$dur"
 done
 
-# Remux (stream copy) the m4a into mp4, as yt-dlp does when merging.
+# Remux (stream copy) into mp4/mkv/webm, as yt-dlp does when merging.
 "$FFMPEG" -hide_banner -loglevel error -y -i "$work/out.m4a" -c copy "$work/remux.mp4"
+"$FFMPEG" -hide_banner -loglevel error -y -i "$work/out.opus" -c copy "$work/remux.mkv"
+"$FFMPEG" -hide_banner -loglevel error -y -i "$work/out.opus" -c copy "$work/remux.webm"
 echo "smoke test passed"
