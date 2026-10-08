@@ -1,8 +1,21 @@
 # ffmpeg-ytdl-minimal-build
 
 A minimal, statically linked, LGPL build of FFmpeg 7.1.1 for Windows x64,
-compiled from the `n7.1.1` source tree. It ships `ffmpeg.exe` and
-`ffprobe.exe` with no DLL dependencies besides Windows system libraries.
+Linux x86_64 and macOS arm64, compiled from the `n7.1.1` source tree. It ships
+`ffmpeg` and `ffprobe` with no runtime dependencies beyond the operating system.
+
+## Download
+
+Get the binaries from the [latest release](../../releases/latest):
+
+| Platform | Files | Linkage |
+|---|---|---|
+| Windows x86_64 | `ffmpeg-windows-x86_64.exe`, `ffprobe-windows-x86_64.exe` | Windows system DLLs only |
+| Linux x86_64 | `ffmpeg-linux-x86_64`, `ffprobe-linux-x86_64` | fully static |
+| macOS arm64 (11.0+) | `ffmpeg-macos-arm64`, `ffprobe-macos-arm64` | system libraries only |
+
+`SHA256SUMS.txt` covers every file. The binaries are not code-signed; on macOS run
+`xattr -d com.apple.quarantine ffmpeg-macos-arm64` after downloading.
 
 It contains exactly what [yt-dlp](https://github.com/yt-dlp/yt-dlp)'s
 post-processors need for a YouTube downloader desktop app, and nothing else.
@@ -46,9 +59,12 @@ All flags live in [`build.sh`](build.sh). The build starts from
 ## Build
 
 `build.sh` is the entire build: it clones FFmpeg at `n7.1.1`, configures,
-builds, strips and copies `ffmpeg.exe` and `ffprobe.exe` to `dist/`.
+builds, strips and copies `ffmpeg` and `ffprobe` to `dist/`. It detects the
+platform. On Linux and macOS it first builds LAME 3.100 and Opus 1.5.2 as static
+libraries, because distro and Homebrew packages do not provide a usable static
+libmp3lame.
 
-From an MSYS2 **MINGW64** shell:
+Windows, from an MSYS2 **MINGW64** shell:
 
 ```
 pacman -S --needed git make diffutils \
@@ -57,13 +73,24 @@ pacman -S --needed git make diffutils \
 ./build.sh
 ```
 
+Linux (Debian/Ubuntu) or macOS:
+
+```
+sudo apt install build-essential nasm pkg-config git curl zlib1g-dev   # Linux
+brew install nasm pkg-config                                           # macOS
+./build.sh
+```
+
+`smoke_test.sh <ffmpeg> <ffprobe>` checks the encoders and converts a test file
+to every audio format yt-dlp uses.
+
 FFmpeg's configure does not handle spaces in paths; build from a path
 without spaces, or pass a space-free source directory as the first argument
 (`OUT_DIR` overrides the output directory).
 
 The GitHub Actions workflow runs the same script on `windows-latest`,
-uploads the binaries as an artifact, and attaches them to a release when a
-`v*` tag is pushed.
+`ubuntu-22.04` and `macos-14`, smoke-tests each build, and publishes all
+binaries plus `SHA256SUMS.txt` as a release when a `v*` tag is pushed.
 
 ## License
 
